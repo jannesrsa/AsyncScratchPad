@@ -1,8 +1,8 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,17 +11,24 @@ namespace AsyncScratchPad
 {
     internal class Program
     {
-        public static HashSet<string> _files = new HashSet<string>();
+        public static readonly string _fileContent = InitStringBuilder();
+        public static readonly Queue<string> _files = new Queue<string>();
+
+        private const int _fileCount = 10;
+        private const int _fileLines = 100000;
 
         internal static void Main(string[] args)
         {
             try
             {
-                WorkerMethod(ConsoleWriteLineWriteFileAsync, nameof(ConsoleWriteLineWriteFileAsync));
-                WorkerMethod(ConsoleWriteLineWithTask, nameof(ConsoleWriteLineWithTask));
-                WorkerMethod(ConsoleWriteLineSyncWithTask, nameof(ConsoleWriteLineSyncWithTask));
-                ConsoleWriteLineSync(nameof(ConsoleWriteLineSync));
-                Console.WriteLine("Finished");
+                ConsoleWriteLine_Sync(nameof(ConsoleWriteLine_Sync));
+
+                WorkerMethod(ConsoleWriteLine_WriteFileAsync, nameof(ConsoleWriteLine_WriteFileAsync)).Wait();
+                WorkerMethod(ConsoleWriteLine_WithTaskComplete_End, nameof(ConsoleWriteLine_WithTaskComplete_End)).Wait();
+                WorkerMethod(ConsoleWriteLine_SyncWithTask, nameof(ConsoleWriteLine_SyncWithTask)).Wait();
+                WorkerMethod(ConsoleWriteLine_WithTaskRun, nameof(ConsoleWriteLine_WithTaskRun)).Wait();
+                WorkerMethod(ConsoleWriteLine_WithTaskDelay0, nameof(ConsoleWriteLine_WithTaskDelay0)).Wait();
+                WorkerMethod(ConsoleWriteLine_WithTaskCompletedTask_Begin, nameof(ConsoleWriteLine_WithTaskCompletedTask_Begin)).Wait();
             }
             catch (Exception ex)
             {
@@ -29,65 +36,92 @@ namespace AsyncScratchPad
             }
             finally
             {
-                foreach (var file in _files)
+                Console.WriteLine("Finished. Press any key to delete all files");
+                Console.ReadKey();
+
+                Console.WriteLine("Delete started ...");
+                while (_files.TryDequeue(out string file))
                 {
                     try
                     {
                         File.Delete(file);
+                        Console.Write(".");
                     }
                     catch { }
-
                 }
+
+                Console.WriteLine();
+                Console.WriteLine("Delete end");
             }
 
+            Console.WriteLine("Press any key to exit.");
             Console.ReadKey();
         }
 
-        private static void WriteFile(int i, [CallerMemberName] string memberName = "")
+        private static void ConsoleWriteLine_Sync(string methodName)
         {
-            var tmpFile = Path.Combine(Path.GetTempPath(), memberName + i);
-            _files.Add(tmpFile);
+            Console.WriteLine(methodName);
 
-            var stringBuilder = new StringBuilder();
-            for (int j = 0; j < 10000; j++)
+            var stopWatch = new Stopwatch();
+            stopWatch.Start();
+
+            for (int i = 0; i < _fileCount; i++)
             {
-                stringBuilder.AppendLine($"{DateTime.Now.ToShortTimeString()} {Thread.CurrentThread.ManagedThreadId}");
+                WriteFile(i, methodName);
             }
 
-            File.WriteAllText(tmpFile, stringBuilder.ToString());
+            stopWatch.Stop();
+
+            Console.WriteLine($"WorkerMethod: Time Taken: {stopWatch.ElapsedMilliseconds}ms");
         }
 
-        private static async Task WriteFileAsync(int i, [CallerMemberName] string memberName = "")
+        private static async Task ConsoleWriteLine_SyncWithTask(int i, string methodName)
         {
-            var tmpFile = Path.Combine(Path.GetTempPath(), memberName + i);
-            _files.Add(tmpFile);
-
-            var stringBuilder = new StringBuilder();
-            for (int j = 0; j < 1000; j++)
-            {
-                stringBuilder.AppendLine($"{DateTime.Now.ToShortTimeString()} {Thread.CurrentThread.ManagedThreadId}");
-            }
-
-            await File.WriteAllTextAsync(tmpFile, stringBuilder.ToString());
+            WriteFile(i, methodName);
+            return;
         }
 
-        private static async Task ConsoleWriteLineSyncWithTask(int i)
+        private static Task ConsoleWriteLine_WithTaskComplete_End(int i, string methodName)
         {
-            WriteFile(i);
-        }
-
-        private static Task ConsoleWriteLineWithTask(int i)
-        {
-            WriteFile(i);
+            WriteFile(i, methodName);
             return Task.CompletedTask;
         }
 
-        private static async Task ConsoleWriteLineWriteFileAsync(int i)
+        private static async Task ConsoleWriteLine_WithTaskDelay0(int i, string methodName)
         {
-            await WriteFileAsync(i);
+            await Task.Delay(0);
+            WriteFile(i, methodName);
         }
 
-        private static void WorkerMethod(Func<int, Task> taskFunction, string methodName)
+        private static async Task ConsoleWriteLine_WithTaskCompletedTask_Begin(int i, string methodName)
+        {
+            await Task.CompletedTask;
+            WriteFile(i, methodName);
+        }
+
+        private static Task ConsoleWriteLine_WithTaskRun(int i, string methodName)
+        {
+            var task = Task.Run(() => WriteFile(i, methodName));
+            return task;
+        }
+
+        private static async Task ConsoleWriteLine_WriteFileAsync(int i, string methodName)
+        {
+            await WriteFileAsync(i, methodName);
+        }
+
+        private static string InitStringBuilder()
+        {
+            var returnVal = new StringBuilder();
+            for (int j = 0; j < _fileLines; j++)
+            {
+                returnVal.AppendLine($"{DateTime.Now.ToString()} ");
+            }
+
+            return returnVal.ToString();
+        }
+
+        private static async Task WorkerMethod(Func<int, string, Task> taskFunction, string methodName)
         {
             Console.WriteLine(methodName);
 
@@ -95,33 +129,34 @@ namespace AsyncScratchPad
             stopWatch.Start();
 
             var taskList = new List<Task>();
-            for (int i = 0; i < 1000; i++)
+            for (int i = 0; i < _fileCount; i++)
             {
-                taskList.Add(taskFunction(i));
+                await taskFunction(i, methodName);
             }
-
-            Task.WhenAll(taskList.ToArray());
 
             stopWatch.Stop();
 
             Console.WriteLine($"WorkerMethod: Time Taken: {stopWatch.ElapsedMilliseconds}ms");
         }
 
-        private static void ConsoleWriteLineSync(string methodName)
+        private static void WriteFile(int i, string memberName)
         {
-            Console.WriteLine(methodName);
+            var tmpFile = GetFileName(i, memberName);
+            File.WriteAllText(tmpFile, _fileContent);
+        }
 
-            var stopWatch = new Stopwatch();
-            stopWatch.Start();
+        private static async Task WriteFileAsync(int i, string memberName)
+        {
+            var tmpFile = GetFileName(i, memberName);
+            await File.WriteAllTextAsync(tmpFile, _fileContent);
+        }
 
-            for (int i = 0; i < 1000; i++)
-            {
-                WriteFile(i);
-            }
+        private static string GetFileName(int i, string memberName)
+        {
+            var tmpFile = Path.Combine(Path.GetTempPath(), $"{memberName}_{i}-{Thread.CurrentThread.ManagedThreadId}");
+            _files.Enqueue(tmpFile);
 
-            stopWatch.Stop();
-
-            Console.WriteLine($"WorkerMethod: Time Taken: {stopWatch.ElapsedMilliseconds}ms");
+            return tmpFile;
         }
     }
 }
